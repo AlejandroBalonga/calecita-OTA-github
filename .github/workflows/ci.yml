@@ -1,0 +1,49 @@
+name: Build and Release
+
+on:
+  push:
+    # Si quieres que SOLO corra con tags, elimina la sección 'branches'
+    branches: [main]
+    tags:
+     - '[0-9]*.[0-9]*.[0-9]*' # Nota: usa comillas simples y asegúrate de la indentación y * en ves de +
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    # Si el workflow se dispara por un tag, este if global asegura que todo el job se detenga si no es un tag
+    if: startsWith(github.ref, 'refs/tags/')
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: "3.9"
+
+      - name: Install PlatformIO
+        run: |
+          python -m pip install --upgrade pip
+          pip install platformio
+
+      - name: Patch FIRMWARE_VERSION
+        run: |
+          VERSION=${{ github.ref_name }}
+          sed -i "s/#define FIRMWARE_VERSION \".*\"/#define FIRMWARE_VERSION \"$VERSION\"/" include/config.h
+          echo "FIRMWARE_VERSION parcheado a: $VERSION"
+
+      - name: Build firmware
+        run: pio run
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: Release ${{ github.ref_name }}
+          draft: false
+          prerelease: false
+          files: .pio/build/d1_mini/firmware.bin
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
