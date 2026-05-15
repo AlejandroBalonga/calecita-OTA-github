@@ -12,7 +12,7 @@
 #define DEFAULT_WIFI_SSID "DESKTOPT_440"
 #define DEFAULT_WIFI_PASS "aabbccdd"
 #define DEFAULT_GHOTA_USER "AlejandroBalonga"
-#define DEFAULT_GHOTA_REPO "esp8266-auto-update-GitHub-OTA"
+#define DEFAULT_GHOTA_REPO "calecita-OTA-github"
 
 // ---------------------------------------------------------------------------
 // Constantes fijas (no configurables en runtime)
