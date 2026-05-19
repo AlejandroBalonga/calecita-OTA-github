@@ -227,15 +227,40 @@ void setup()
     //------------------------------leo los datos guardados en la memoria y lo cargo en los datos------------------------------
     EEPROM.begin(10);
     equipo = EEPROM.read(0);
-    limite_caja = EEPROM.read(1) * 10;
-    // cantidad_alarma = EEPROM.read(2) * 10;
-    cantidad_alarma = limite_caja - EEPROM.read(1); // ahora la cantidad para la alarma es el limite de la caja menos el 10% de esta
-    cantidad_de_cajas = EEPROM.read(3);
-    cavidades = EEPROM.read(4);
-    Tbloqueo = EEPROM.read(5);
-    Tdesbloqueo = EEPROM.read(6);
-    Treset = EEPROM.read(7);
-    Tcinta = EEPROM.read(8);
+    if (equipo == 255)
+    {
+        equipo = 1;            // si no hay un numero de equipo guardado, asigno el 1 por defecto
+        limite_caja = 1000;    // asigno un limite de caja por defecto
+        cantidad_alarma = 900; // asigno una cantidad para la alarma por defecto (90% del limite de caja)
+        cantidad_de_cajas = 4; // asigno una cantidad de cajas por defecto
+        cavidades = 16;        // asigno una cantidad de cavidades por defecto
+        Tbloqueo = 10;         // asigno un tiempo de bloqueo por defecto
+        Tdesbloqueo = 3;       // asigno un tiempo de desbloqueo por defecto
+        Treset = 10;           // asigno un tiempo de reset por defecto
+        Tcinta = 30;           // asigno un tiempo de cinta por defecto
+        EEPROM.write(0, equipo);
+        EEPROM.write(1, limite_caja / 10);
+        EEPROM.write(2, cantidad_alarma / 10);
+        EEPROM.write(3, cantidad_de_cajas);
+        EEPROM.write(4, cavidades);
+        EEPROM.write(5, Tbloqueo);
+        EEPROM.write(6, Tdesbloqueo);
+        EEPROM.write(7, Treset);
+        EEPROM.write(8, Tcinta);
+        EEPROM.commit();
+    }
+    else
+    {
+        limite_caja = EEPROM.read(1) * 10;
+        // cantidad_alarma = EEPROM.read(2) * 10;
+        cantidad_alarma = limite_caja - EEPROM.read(1); // ahora la cantidad para la alarma es el limite de la caja menos el 10% de esta
+        cantidad_de_cajas = EEPROM.read(3);
+        cavidades = EEPROM.read(4);
+        Tbloqueo = EEPROM.read(5);
+        Tdesbloqueo = EEPROM.read(6);
+        Treset = EEPROM.read(7);
+        Tcinta = EEPROM.read(8);
+    }
 
     automatico = 1;   // inicio en automatico
     tiempo_giro = 50; // tiempo vace de cambio de caja, despues se toma el tiempo real
