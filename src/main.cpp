@@ -185,7 +185,7 @@ void setup()
 
     Serial.println();
     Serial.println("=====================================");
-    Serial.println("  ESP8266 OTA GitHub Updater");
+    Serial.println("  Calecita OTA GitHub Auto-Update");
     Serial.printf("  Version: %s\n", FIRMWARE_VERSION);
     Serial.println("=====================================");
 
@@ -288,7 +288,7 @@ void loop()
             PCF8574 pcf(0x38); // para los que terminan en A
             toglePcf = true;
         }
-        delay(2000);
+        blinkLed(3, 500, 500);
         // return;
     }
     else
@@ -341,7 +341,7 @@ void loop()
             escribo_LCD = 1;
             pausa = 1;
             pcf.write8(0xFF); // apago todas las salidas para que no quede nada activo mientras este el timer
-            delay(2000);
+            blinkLed(3, 500, 500);
             return;
         }
 
