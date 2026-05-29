@@ -20,7 +20,7 @@ LiquidCrystalI2C_RS_EN(lcd, 0x27, false)
 #include <PCF8574.h>
     // nombre y direccion i2c de el expansor
     // PCF8574 pcf(0x20);
-    PCF8574 pcf(0x38); // para los que terminan en A
+    PCF8574 pcf(0x39); // para los que terminan en A
 
 #define LED_PIN D4
 #define B_verde D5
@@ -42,7 +42,7 @@ unsigned long lastCheck = 0;
 unsigned long lastReconnectAttempt = 0;
 #define espera_e_cinta_calesita 2
 byte equipo;                  // el numero del equio
-int cantidad;                 // creo la variable cantidad
+unsigned int cantidad;        // creo la variable cantidad
 unsigned int limite_caja;     // cantidad total para cada caja
 unsigned int cantidad_alarma; // en la ultima caja suena la alarma cuando pasa de esta cantidad
 unsigned long tiempo_actual;
@@ -298,11 +298,15 @@ void loop()
     //------------------------------aviso si algun modulo de expansion esta desconectado
     if (!pcf.isConnected() && Serial.available() == 0)
     {
-        lcd.clear();                                    // limpio todo el LCD
-        lcd.print(F("Expansor PCF8574 not connected")); // primer renglon el numero del equipo
+        String avisoFalla = "Expansor PCF8574";
+        if (toglePcf)
+            avisoFalla += "A";
+        avisoFalla += " disconected";
+        lcd.clear();           // limpio todo el LCD
+        lcd.print(avisoFalla); // primer renglon el numero del equipo
         escribo_LCD = 1;
         pausa = 1;
-        Serial.println("Expansor PCF8574 not connected");
+        Serial.println(avisoFalla);
         if (toglePcf)
         {
             PCF8574 pcf(0x20);
@@ -310,7 +314,7 @@ void loop()
         }
         else
         {
-            PCF8574 pcf(0x38); // para los que terminan en A
+            PCF8574 pcf(0x39); // para los que terminan en A
             toglePcf = true;
         }
         blinkLed(3, 500, 500);
@@ -844,7 +848,7 @@ void loop()
 
         if (inyectora)
         {
-            if (tiempo_actual - tiempo_pasado_antirebote_inyectora >= 10 && inyectoraViejo != inyectora) // espero a que este en HIGH por 1 segundo
+            if (tiempo_actual - tiempo_pasado_antirebote_inyectora >= 5 && inyectoraViejo != inyectora) // espero a que este en HIGH por 1/2 segundo
             {
                 // tiempo_pasado_antirebote_inyectora = tiempo_pasado_antirebote_inyectora - 10;  //evito que el IF vuelva a pasar porque el tiempo_actual es = a 10 por varios siclos
                 inyectoraViejo = inyectora;
