@@ -18,9 +18,11 @@ LiquidCrystalI2C_RS_EN(lcd, 0x27, false)
 
 // control de modulos expansores
 #include <PCF8574.h>
-    // nombre y direccion i2c de el expansor
-    // PCF8574 pcf(0x20);
-    PCF8574 pcf(0x39); // para los que terminan en A
+    int pcfDir = 0x20;
+int pcfDirs[] = {0x20, 0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x38, 0x39, 0x3A, 0x3B, 0x3C, 0x3D, 0x3E, 0x3F}; // array de direcciones i2c para probar los expansores
+// nombre y direccion i2c de el expansor
+// PCF8574 pcf(0x20);
+PCF8574 pcf(pcfDir); // 0x38 para los que terminan en A
 
 #define LED_PIN D4
 #define B_verde D5
@@ -75,6 +77,7 @@ byte caja_comp = 1;
 byte T_aviso_giro = 5; // aviso que esta por cambiar de caja 5 segundo antes
 byte entradas;
 byte mas_rapido;
+byte dirIndex = 0;
 bool aviso_giro;
 bool parpadeo;
 bool parpadeo_viejo;
@@ -123,8 +126,7 @@ bool pausa = 0;
 bool guradamotorCinta,
     guradamotorCalecita,
     guardamotores,
-    timerExterno,
-    toglePcf;
+    timerExterno;
 // bool placaDeEntradasVieja;
 
 byte N_inyecciones = 0;
@@ -298,25 +300,19 @@ void loop()
     //------------------------------aviso si algun modulo de expansion esta desconectado
     if (!pcf.isConnected() && Serial.available() == 0)
     {
-        String avisoFalla = "Expansor PCF8574";
-        if (toglePcf)
-            avisoFalla += "A";
-        avisoFalla += " disconected";
+        String avisoFalla = "Expansor PCF8574 disconected, dir I2C: ";
+        avisoFalla += String(pcfDir, HEX);
         lcd.clear();           // limpio todo el LCD
         lcd.print(avisoFalla); // primer renglon el numero del equipo
         escribo_LCD = 1;
         pausa = 1;
         Serial.println(avisoFalla);
-        if (toglePcf)
+        dirIndex++;
+        if (dirIndex >= sizeof(pcfDirs))
         {
-            PCF8574 pcf(0x20);
-            toglePcf = false;
+            dirIndex = 0;
         }
-        else
-        {
-            PCF8574 pcf(0x39); // para los que terminan en A
-            toglePcf = true;
-        }
+        pcfDir = pcfDirs[dirIndex];
         blinkLed(3, 500, 500);
         // return;
     }
