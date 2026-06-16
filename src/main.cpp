@@ -17,12 +17,10 @@
 LiquidCrystalI2C_RS_EN(lcd, 0x27, false)
 
 // control de modulos expansores
-#include <PCF8574.h>
-    int pcfDir = 0x20;
-int pcfDirs[] = {0x20, 0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x38, 0x39, 0x3A, 0x3B, 0x3C, 0x3D, 0x3E, 0x3F}; // array de direcciones i2c para probar los expansores
+#include <PCF8574.h>                                                                                            // direccion i2c del expansor, se prueba con varias direcciones en caso de que el usuario tenga un modelo diferente
+    int pcfDirs[] = {0x20, 0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x38, 0x39, 0x3A, 0x3B, 0x3C, 0x3D, 0x3E, 0x3F}; // array de direcciones i2c para probar los expansores
 // nombre y direccion i2c de el expansor
-// PCF8574 pcf(0x20);
-PCF8574 pcf(pcfDir); // 0x38 para los que terminan en A
+PCF8574 pcf(0x20); // 0x38 para los que terminan en A
 
 #define LED_PIN D4
 #define B_verde D5
@@ -300,20 +298,25 @@ void loop()
     //------------------------------aviso si algun modulo de expansion esta desconectado
     if (!pcf.isConnected() && Serial.available() == 0)
     {
-        String avisoFalla = "Expansor PCF8574 disconected, dir I2C: ";
-        avisoFalla += String(pcfDir, HEX);
+        String avisoFalla = "Expansor PCF8574 disconected, dir I2C: 0x";
+        // avisoFalla += String(pcfDirs[dirIndex], HEX);
+        avisoFalla += String(pcf.getAddress(), HEX);
         lcd.clear();           // limpio todo el LCD
         lcd.print(avisoFalla); // primer renglon el numero del equipo
         escribo_LCD = 1;
         pausa = 1;
+        // Serial.print("Index: ");
+        // Serial.print(dirIndex);
+        // Serial.print("/");
+        // Serial.println(sizeof(pcfDirs) / sizeof(pcfDirs[0]));
         Serial.println(avisoFalla);
         dirIndex++;
-        if (dirIndex >= sizeof(pcfDirs))
+        if (dirIndex >= sizeof(pcfDirs) / sizeof(pcfDirs[0]))
         {
             dirIndex = 0;
         }
-        pcfDir = pcfDirs[dirIndex];
-        blinkLed(3, 500, 500);
+        pcf.setAddress(pcfDirs[dirIndex]);
+        blinkLed(1, 500, 500);
         // return;
     }
     else
@@ -1382,7 +1385,7 @@ void loop()
                 else
                 { /*if (pcf.readButton(S_amarillo) == LOW)*/
                     pcf.write(S_verde, LOW);
-                    Serial.println(F(" verde "));
+                    // Serial.println(F(" verde "));
                     pcf.write(S_amarillo, HIGH);
                 }
                 //}
