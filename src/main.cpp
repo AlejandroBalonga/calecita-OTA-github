@@ -35,12 +35,16 @@ PCF8574 pcf(0x20); // 0x38 para los que terminan en A
 #define S_calecita 5
 #define Habilitacion D8
 
+#define btnRef 30 // referencia para el antirebote de los botones, max 255
+#define espera_e_cinta_calesita 2
+#define Tbloqueo 20   // tiempo para bloquear
+#define Tdesbloqueo 2 // tiempo para desbloquear
+
 OTAUpdater updater;
 AppConfig appCfg;
 
 unsigned long lastCheck = 0;
 unsigned long lastReconnectAttempt = 0;
-#define espera_e_cinta_calesita 2
 byte equipo;                  // el numero del equio
 unsigned int cantidad;        // creo la variable cantidad
 unsigned int limite_caja;     // cantidad total para cada caja
@@ -66,8 +70,6 @@ unsigned int buttonMillis;
 byte cantidad_de_cajas;
 byte numero_caja = 1;
 byte cavidades;
-byte Tbloqueo;    // tiempo para bloquear
-byte Tdesbloqueo; // tiempo para desbloquear
 byte Treset;
 byte demora;
 byte calculo_comp;
@@ -76,6 +78,9 @@ byte T_aviso_giro = 5; // aviso que esta por cambiar de caja 5 segundo antes
 byte entradas;
 byte mas_rapido;
 byte dirIndex = 0;
+byte T_ON_Cinta;
+byte T_OFF_Cinta;
+byte T_cinta_contador;
 bool aviso_giro;
 bool parpadeo;
 bool parpadeo_viejo;
@@ -109,11 +114,14 @@ bool salida_calecita_viejo;
 bool salida_cinta = 1;
 bool salida_cinta_viejo;
 bool antirebote_muestra = 1; // dato para restar una muestra por cada inyeccion
+byte boton_verde_acum = btnRef;
 bool boton_verde;
 bool boton_verde_viejo;
+byte boton_rojo_acum = btnRef;
 bool boton_rojo;
 bool boton_rojo_viejo;
 bool pregunta;
+bool cambiar;
 bool Fcontacto;
 bool obstruido;
 bool obstruido_viejo;
@@ -124,11 +132,95 @@ bool pausa = 0;
 bool guradamotorCinta,
     guradamotorCalecita,
     guardamotores,
+    parpadeo_viejo_cinta,
     timerExterno;
 // bool placaDeEntradasVieja;
 
 byte N_inyecciones = 0;
 
+// ==========================================
+// Clase Debouncer (Independiente del Hardware)
+// ==========================================
+class Debouncer
+{
+private:
+    unsigned long debounceDelay;
+    unsigned long lastDebounceTime = 0;
+    bool debouncedState;
+    bool lastFlickerableState;
+
+public:
+    // Constructor: recibe el tiempo de debounce y el estado inicial esperado
+    Debouncer(unsigned long delay = 50, bool initialState = HIGH)
+    {
+        this->debounceDelay = delay;
+        this->debouncedState = initialState;
+        this->lastFlickerableState = initialState;
+    }
+
+    // Procesa el estado crudo (raw) y devuelve el estado filtrado
+    bool update(bool rawState)
+    {
+        // Si el estado cambió (por ruido o porque se presionó)
+        if (rawState != lastFlickerableState)
+        {
+            lastDebounceTime = millis(); // Reinicia el temporizador
+            lastFlickerableState = rawState;
+        }
+
+        // Si ha pasado el tiempo suficiente desde el último rebote
+        if ((millis() - lastDebounceTime) > debounceDelay)
+        {
+            // Si el estado estable actual es diferente al que leemos
+            if (rawState != debouncedState)
+            {
+                debouncedState = rawState;
+            }
+        }
+
+        return debouncedState;
+    }
+
+    // Devuelve el último estado estable sin procesar un nuevo ciclo
+    bool getState() const
+    {
+        return debouncedState;
+    }
+};
+Debouncer filtroInyectora(50, LOW);     // filtro para la entrada de la inyectora
+Debouncer filtroBotonVerde(50, HIGH);   // filtro para el boton verde
+Debouncer filtroBotonRojo(50, HIGH);    // filtro para el boton rojo
+Debouncer filtroFinalCarrera(50, HIGH); // filtro para el final de carrera
+// ==========================================
+// Ejemplo de uso
+// ==========================================
+/*
+const int pinBoton = 2;
+const int pinLED = 13;
+
+// Instanciamos el filtro (50ms, asumiendo que el botón sin pulsar lee HIGH)
+Debouncer filtroBoton(50, HIGH);
+
+void setup() {
+  pinMode(pinBoton, INPUT_PULLUP);
+  pinMode(pinLED, OUTPUT);
+}
+
+void loop() {
+  // 1. Lees el estado físico (o de donde quieras)
+  bool lecturaCruda = digitalRead(pinBoton);
+
+  // 2. Le pasas la lectura al filtro
+  bool estadoLimpio = filtroBoton.update(lecturaCruda);
+
+  // 3. Actúas sobre el estado limpio
+  if (estadoLimpio == LOW) {
+    digitalWrite(pinLED, HIGH);
+  } else {
+    digitalWrite(pinLED, LOW);
+  }
+}
+//*/
 void blinkLed(int times, int onMs, int offMs)
 {
     for (int i = 0; i < times; i++)
@@ -201,13 +293,14 @@ void setup()
     lcd.print(F("cajas Version: "));
     lcd.print(FIRMWARE_VERSION);
     lcd.setCursor(0, 2);
-    lcd.print(F(" Alejandro A Balonga"));
+    lcd.print(F("Alejandro A Balonga"));
     lcd.setCursor(0, 3);
     lcd.print(F("desde el 2017"));
     // delay(5000);
     escribo_LCD = 1;
 
     blinkLed(3, 100, 100);
+    pcf.begin(0xff); // inicializo el expansor con todas las salidas apagadas
 
     // Cargar configuración desde NVS
     configLoad(appCfg);
@@ -234,8 +327,8 @@ void setup()
         cantidad_alarma = 900; // asigno una cantidad para la alarma por defecto (90% del limite de caja)
         cantidad_de_cajas = 4; // asigno una cantidad de cajas por defecto
         cavidades = 16;        // asigno una cantidad de cavidades por defecto
-        Tbloqueo = 10;         // asigno un tiempo de bloqueo por defecto
-        Tdesbloqueo = 3;       // asigno un tiempo de desbloqueo por defecto
+        T_ON_Cinta = 255;      // asigno un tiempo de bloqueo por defecto
+        T_OFF_Cinta = 0;       // asigno un tiempo de desbloqueo por defecto
         Treset = 10;           // asigno un tiempo de reset por defecto
         Tcinta = 30;           // asigno un tiempo de cinta por defecto
         EEPROM.write(0, equipo);
@@ -243,8 +336,8 @@ void setup()
         EEPROM.write(2, cantidad_alarma / 10);
         EEPROM.write(3, cantidad_de_cajas);
         EEPROM.write(4, cavidades);
-        EEPROM.write(5, Tbloqueo);
-        EEPROM.write(6, Tdesbloqueo);
+        EEPROM.write(5, T_ON_Cinta);
+        EEPROM.write(6, T_OFF_Cinta);
         EEPROM.write(7, Treset);
         EEPROM.write(8, Tcinta);
         EEPROM.commit();
@@ -256,8 +349,8 @@ void setup()
         cantidad_alarma = limite_caja - EEPROM.read(1); // ahora la cantidad para la alarma es el limite de la caja menos el 10% de esta
         cantidad_de_cajas = EEPROM.read(3);
         cavidades = EEPROM.read(4);
-        Tbloqueo = EEPROM.read(5);
-        Tdesbloqueo = EEPROM.read(6);
+        T_ON_Cinta = EEPROM.read(5);
+        T_OFF_Cinta = EEPROM.read(6);
         Treset = EEPROM.read(7);
         Tcinta = EEPROM.read(8);
     }
@@ -298,13 +391,13 @@ void loop()
     //------------------------------aviso si algun modulo de expansion esta desconectado
     if (!pcf.isConnected() && Serial.available() == 0)
     {
-        String avisoFalla = "Expansor PCF8574 disconected, dir I2C: 0x";
+        String avisoFalla = "PCF8574 disconected, dir I2C: 0x";
         // avisoFalla += String(pcfDirs[dirIndex], HEX);
         avisoFalla += String(pcf.getAddress(), HEX);
         lcd.clear();           // limpio todo el LCD
         lcd.print(avisoFalla); // primer renglon el numero del equipo
         escribo_LCD = 1;
-        pausa = 1;
+        // pausa = 1;
         // Serial.print("Index: ");
         // Serial.print(dirIndex);
         // Serial.print("/");
@@ -316,7 +409,8 @@ void loop()
             dirIndex = 0;
         }
         pcf.setAddress(pcfDirs[dirIndex]);
-        blinkLed(1, 500, 500);
+        pcf.begin(0xff); // inicializo el expansor con todas las salidas apagadas
+        blinkLed(1, 100, 100);
         // return;
     }
     else
@@ -333,8 +427,10 @@ void loop()
         // rotacion_manual = 1 - bitRead(entradasBufer, Erotacion_manual);
         // cambio_caja_OK = 1 - bitRead(entradasBufer, Ecambio_caja_OK);
         // reset = 1 - bitRead(entradasBufer, Ereset);
-        inyectora = bitRead(entradasBufer, E_inyectora);       // leo la entrada para la inyectora
-        final_carrera = bitRead(entradasBufer, E_fin_carrera); // fin de carrera de la calecita
+        // inyectora = bitRead(entradasBufer, E_inyectora);       // leo la entrada para la inyectora
+        inyectora = filtroInyectora.update(bitRead(entradasBufer, E_inyectora));
+        // final_carrera = bitRead(entradasBufer, E_fin_carrera); // fin de carrera de la calecita
+        final_carrera = filtroFinalCarrera.update(bitRead(entradasBufer, E_fin_carrera));
         if ((tiempo_actual - buttonMillis) >= 20)
         {
             buttonMillis = tiempo_actual;
@@ -357,10 +453,18 @@ void loop()
             pcf.write8(entradasBufer);//*/
         }
         // boton_verde = 1 - bitRead(entradasBufer, B_verde);
-        boton_verde = !digitalRead(B_verde);
+        // boton_verde = !digitalRead(B_verde);
+        /*boton_verde_acum = digitalRead(B_verde) ? boton_verde_acum < btnRef ? boton_verde_acum + 1 : btnRef : boton_verde_acum > 0 ? boton_verde_acum - 1
+                                                                                                                                   : 0;
+        boton_verde = boton_verde_acum<btnRef / 3 ? 1 : boton_verde_acum>(btnRef / 3) * 2 ? 0 : boton_verde;
         // boton_rojo = 1 - bitRead(entradasBufer, B_rojo);
-        boton_rojo = !digitalRead(B_rojo);
-
+        // boton_rojo = !digitalRead(B_rojo);
+        boton_rojo_acum = digitalRead(B_rojo) ? boton_rojo_acum < btnRef ? boton_rojo_acum + 1 : btnRef : boton_rojo_acum > 0 ? boton_rojo_acum - 1
+                                                                                                                              : 0;
+        boton_rojo = boton_rojo_acum<btnRef / 3 ? 1 : boton_rojo_acum>(btnRef / 3) * 2 ? 0 : boton_rojo;
+*/
+        boton_verde = filtroBotonVerde.update(!digitalRead(B_verde));
+        boton_rojo = filtroBotonRojo.update(!digitalRead(B_rojo));
         //----------------------------------aviso de sacar el Timer---------------------------------------
         if (timerExterno)
         {
@@ -393,16 +497,193 @@ void loop()
 
             lcd.clear(); // limpio todo el LCD
 
-            lcd.print(F("EQ ")); // primer renglon el numero del equipo
-            lcd.print(equipo);
+            // lcd.print(F("EQ ")); // primer renglon el numero del equipo
+            // lcd.print(equipo);
 
-            lcd.setCursor(0, 1); // escrivo en en el segundo renglon
-            if (menu == 1)
+            // lcd.setCursor(0, 1); // escrivo en en el segundo renglon
+            /*
+            nuevo menu LCD ampliado para mostrar mas datos
+            =1 muestra el numero de cavidades
+            =2 muestra la cantidad por caja
+            =3 muestra el tiempo en segundos para vaciar la cinta de 0 a 255
+            =4 muestra el tiempo en segundos de la cinta encendido,
+            donde 0 es igual a la duracion de la señal de maquina
+            y el maximo es igual a la duracion del tiempo entre cada inyeccion
+            =5 muestra el tiempo en segundo de la cinta apagado,
+            donde 0 es continuo y el maximo es igual a la duracion del tiempo entre cada inyeccion
+            */
+            lcd.setCursor(0, 0);
+            if (cambiar)
             {
-                lcd.print(F(">> CAVIDADES "));
+                switch (menu)
+                {
+                case 1:
+                    lcd.print(F("CAVIDADES "));
+                    lcd.print(cavidades);
+                    lcd.setCursor(0, 1);
+                    lcd.print(F("CANTIDAD QUE SUMA"));
+                    lcd.setCursor(0, 2);
+                    lcd.print(F("CON SENAL DE INYECIO"));
+                    break;
+                case 2:
+                    lcd.print(F("CANT x CAJA "));
+                    lcd.print(limite_caja);
+                    lcd.setCursor(0, 1);
+                    lcd.print(F("CANTIDAD FINAL DE "));
+                    lcd.setCursor(0, 2);
+                    lcd.print(F("PIEZAS EN UNA CAJA"));
+                    break;
+                case 3:
+                    lcd.print(F("T VAC. CINTA "));
+                    lcd.print(Tcinta);
+                    lcd.setCursor(0, 1);
+                    lcd.print(F("TIEMPO DESDE EXPULSI"));
+                    lcd.setCursor(0, 2);
+                    lcd.print(F("ON HASTA LA CAJA"));
+                    break;
+                case 4:
+                    lcd.print(F("T ON CINTA "));
+                    lcd.print(T_ON_Cinta);
+                    lcd.setCursor(0, 1);
+                    lcd.print(F("TIEMPO QUE LA CINTA"));
+                    lcd.setCursor(0, 2);
+                    lcd.print(F("ESTA ENCENDIDA"));
+                    break;
+                case 5:
+                    lcd.print(F("T OFF CINTA "));
+                    lcd.print(T_OFF_Cinta);
+                    lcd.setCursor(0, 1);
+                    lcd.print(F("TIEMPO QUE LA CINTA"));
+                    lcd.setCursor(0, 2);
+                    lcd.print(F("ESTA APAGADA"));
+                    break;
+                }
+            }
+            else if (menu > 0 && menu <= 3)
+            {
+                if (menu == 1)
+                    lcd.print(F(">"));
+                else
+                    lcd.print(F(" "));
+                lcd.print(F("CAVIDADES "));
+                lcd.print(cavidades);
+                lcd.setCursor(0, 1);
+                if (menu == 2)
+                    lcd.print(F(">"));
+                else
+                    lcd.print(F(" "));
+                lcd.print(F("CANT x CAJA "));
+                lcd.print(limite_caja);
+                lcd.setCursor(0, 2);
+                if (menu == 3)
+                    lcd.print(F(">"));
+                else
+                    lcd.print(F(" "));
+                lcd.print(F("T VAC. CINTA "));
+                lcd.print(Tcinta);
+            }
+            else if (menu > 3 && menu <= 6)
+            {
+                if (menu == 4)
+                    lcd.print(F(">"));
+                else
+                    lcd.print(F(" "));
+                lcd.print(F("T ON CINTA "));
+                lcd.print(T_ON_Cinta);
+                lcd.setCursor(0, 1);
+                if (menu == 5)
+                    lcd.print(F(">"));
+                else
+                    lcd.print(F(" "));
+                lcd.print(F("T OFF CINTA "));
+                lcd.print(T_OFF_Cinta);
+                lcd.setCursor(0, 2);
+                if (menu == 6)
+                    lcd.print(F(">"));
+                else
+                    lcd.print(F(" "));
+                // lcd.print(F("T RESET "));
+                // lcd.print(Treset);
+            }
+            else
+            {
+                lcd.setCursor(0, 1); // escrivo en en el LCD el numero de CAVIDADES
+                lcd.print(F("CAV "));
+                lcd.print(cavidades);
+
+                lcd.setCursor(8, 1); // escrivo en en el LCD el numero de CAJA
+                lcd.print(F("CxCAJA "));
+                lcd.print(limite_caja);
+
+                lcd.setCursor(0, 2); // escrivo la cantidad en el LCD
+                // lcd.print(F("N.iny "));
+                // lcd.print(N_inyecciones);
+                lcd.print(F("Comp "));
+                lcd.print(caja_comp);
+                lcd.print(F("/"));
+                lcd.print(calculo_comp);
+                lcd.setCursor(10, 2); // escrivo la cantidad en el LCD
+                lcd.print(F("CANT "));
+                lcd.print(cantidad);
+
+                lcd.setCursor(6, 0);
+                if (guradamotorCalecita)
+                {
+                    lcd.print(F("Gu.Mo.CALESITA"));
+                    tiempo_luz = tiempo_actual; // enciendo el back light del LCD
+                }
+                else if (guradamotorCinta)
+                {
+                    lcd.print(F("Gu.Mo.CINTA"));
+                    tiempo_luz = tiempo_actual; // enciendo el back light del LCD
+                }
+                else if (obstruido == 1)
+                {
+                    lcd.print(F("GIRO OBSTRUIDO"));
+                }
+                else if (girar_calecita == 1)
+                {
+                    lcd.print(F("GIRANDO"));
+                    tiempo_luz = tiempo_actual; // enciendo el back light del LCD
+                }
+                else if (caja_llena == 1 && ultima_caja == 0)
+                {
+                    lcd.print(F("GIRANDO EN"));
+                    tiempo_luz = tiempo_actual; // enciendo el back light del LCD
+                }
+                else if (automatico == 1 && caja_llena == 0 && ultima_caja == 0 && pregunta == 0 && pausa == true)
+                {
+                    lcd.print(F("PAUSA"));
+                }
+                else if (automatico == 1 && caja_llena == 0 && ultima_caja == 0 && pregunta == 0)
+                {
+                    lcd.print(F("AUTOMATICO"));
+                }
+                else if (automatico == 1 && caja_llena == 0 && ultima_caja == 0 && pregunta == 1)
+                {
+                    lcd.print(F("CAMBIO MANUAL?"));
+                }
+                else if (automatico == 0)
+                {
+                    lcd.print(F("MANUAL"));
+                }
+                else if (caja_llena == 1 && ultima_caja == 1)
+                {
+                    lcd.print(F("CALECITA LLENA"));
+                    tiempo_luz = tiempo_actual; // enciendo el back light del LCD
+                }
+                else if (ultima_caja == 1 && caja_llena == 0)
+                {
+                    lcd.print(F("ULTIMA CAJA"));
+                    tiempo_luz = tiempo_actual; // enciendo el back light del LCD
+                }
+            }
+            /*if (menu == 1)
+            {
+                lcd.print(F(">CAVIDADES "));
                 lcd.print(cavidades);
                 lcd.setCursor(0, 2); // escrivo en en el LCD el numero de limite_caja
-                lcd.print(F("   CANT x CAJA "));
+                lcd.print(F(" CANT x CAJA "));
                 lcd.print(limite_caja);
             }
             else if (menu == 2)
@@ -432,22 +713,36 @@ void loop()
                 lcd.setCursor(10, 2); // escrivo la cantidad en el LCD
                 lcd.print(F("CANT "));
                 lcd.print(cantidad);
-            }
+            }*/
 
             lcd.setCursor(0, 3);
-            if (automatico == 1 && menu == 0 && pregunta == 0)
+            if (menu)
             {
-                lcd.print(F("MANUAL"));
-                lcd.setCursor(11, 3);
-                lcd.print(F("REINICIAR"));
+                if (cambiar)
+                    lcd.print(F("BAJAR GUARDAR SUBIR"));
+                else
+                    lcd.print(F("BAJAR CAMBIAR SUBIR"));
+
+                // lcd.print(F("RESTA"));
+                // lcd.setCursor(16, 3);
+                // lcd.print(F("SUMA"));
             }
-            else if (automatico == 1 && menu == 0 && pregunta == 1)
+            else if (automatico)
             {
-                lcd.print(F("  NO"));
-                lcd.setCursor(16, 3);
-                lcd.print(F("SI  "));
+                if (pregunta)
+                {
+                    lcd.print(F("  NO"));
+                    lcd.setCursor(16, 3);
+                    lcd.print(F("SI  "));
+                }
+                else
+                {
+                    lcd.print(F("MANUAL"));
+                    lcd.setCursor(11, 3);
+                    lcd.print(F("REINICIAR"));
+                }
             }
-            else if (automatico == 0 && menu == 0)
+            else
             {
                 if (girar_calecita == 0)
                 {
@@ -463,12 +758,7 @@ void loop()
                 else
                     lcd.print(F("AUTOMATICO"));
             }
-            else if (menu != 0)
-            {
-                lcd.print(F("RESTA"));
-                lcd.setCursor(16, 3);
-                lcd.print(F("SUMA"));
-            }
+
             /*
               lcd.setCursor(0, 3); //ESCRIBO EL ESTADO DE LAS ENTRADAS
               lcd.print(F("E"));
@@ -492,58 +782,6 @@ void loop()
               lcd.print(1 - bitRead(entradasBufer, S_calecita));
               lcd.print(1 - bitRead(entradasBufer, S_alarma));
           */
-
-            lcd.setCursor(6, 0);
-            if (guradamotorCalecita)
-            {
-                lcd.print(F("Gu.Mo.CALESITA"));
-                tiempo_luz = tiempo_actual; // enciendo el back light del LCD
-            }
-            else if (guradamotorCinta)
-            {
-                lcd.print(F("Gu.Mo.CINTA"));
-                tiempo_luz = tiempo_actual; // enciendo el back light del LCD
-            }
-            else if (obstruido == 1)
-            {
-                lcd.print(F("GIRO OBSTRUIDO"));
-            }
-            else if (girar_calecita == 1)
-            {
-                lcd.print(F("GIRANDO"));
-                tiempo_luz = tiempo_actual; // enciendo el back light del LCD
-            }
-            else if (caja_llena == 1 && ultima_caja == 0)
-            {
-                lcd.print(F("GIRANDO EN"));
-                tiempo_luz = tiempo_actual; // enciendo el back light del LCD
-            }
-            else if (automatico == 1 && caja_llena == 0 && ultima_caja == 0 && pregunta == 0 && pausa == true)
-            {
-                lcd.print(F("PAUSA"));
-            }
-            else if (automatico == 1 && caja_llena == 0 && ultima_caja == 0 && pregunta == 0)
-            {
-                lcd.print(F("AUTOMATICO"));
-            }
-            else if (automatico == 1 && caja_llena == 0 && ultima_caja == 0 && pregunta == 1)
-            {
-                lcd.print(F("CAMBIO MANUAL?"));
-            }
-            else if (automatico == 0)
-            {
-                lcd.print(F("MANUAL"));
-            }
-            else if (caja_llena == 1 && ultima_caja == 1)
-            {
-                lcd.print(F("CALECITA LLENA"));
-                tiempo_luz = tiempo_actual; // enciendo el back light del LCD
-            }
-            else if (ultima_caja == 1 && caja_llena == 0)
-            {
-                lcd.print(F("ULTIMA CAJA"));
-                tiempo_luz = tiempo_actual; // enciendo el back light del LCD
-            }
         }
 
         //------------------------------------------------------------------CONDICION AUTOMATICO O MANUAL---------------------
@@ -570,7 +808,7 @@ void loop()
             automatico_viejo = automatico;
             escribo_LCD = 1;
         }
-        //----------------------------------------------------------------------------ALARMA DE GUARDAMOTORES-------------------
+        //---------------------------------------------------------MOTORES Y ALARMA DE GUARDAMOTORES-------------------
 
         if (guradamotorCalecita || guradamotorCinta) // si se habre un guardamotor
         {
@@ -595,15 +833,15 @@ void loop()
             digitalWrite(S_alarma, HIGH);
             }*/
         }
-        if (salida_cinta != salida_cinta_viejo && !obstruido)
+        if (salida_cinta != salida_cinta_viejo)
         {
             salida_cinta_viejo = salida_cinta;
-            tiempo_enciendo_cinta = tiempo_actual;
-            if (salida_cinta == 1)
+            // tiempo_enciendo_cinta = tiempo_actual;
+            if (salida_cinta == 1 && !obstruido && !salida_calecita && !pausa)
             {
                 // digitalWrite(S_calecita, HIGH); //apago la calecita
                 // delay (500);
-                //  digitalWrite(S_cinta, LOW); //enciendo la cinta
+                pcf.write(S_cinta, 0); // enciendo la cinta
             }
             else
             {
@@ -614,11 +852,10 @@ void loop()
         }
         if (tiempo_actual - tiempo_enciendo_cinta == espera_e_cinta_calesita * 10)
         {
+            salida_cinta = 1;
             // tiempo_enciendo_cinta--;     //para que no lo vuelva a hacer
-            if (salida_cinta)
-                pcf.write(S_cinta, 0); // enciendo la cinta con LOW si no tiene saltado el guardamotor
-            if (salida_calecita)
-                pcf.write(S_calecita, 0); // enciendo la calesita con LOW si no tiene saltado el guardamotor
+            // if (salida_cinta && !obstruido)pcf.write(S_cinta, 0); // enciendo la cinta con LOW si no tiene saltado el guardamotor
+            // if (salida_calecita)pcf.write(S_calecita, 0); // enciendo la calesita con LOW si no tiene saltado el guardamotor
         }
         if (salida_calecita != salida_calecita_viejo)
         {
@@ -632,10 +869,12 @@ void loop()
                 if (automatico == 0)
                     pcf.write(S_calecita, guradamotorCalecita); // enciendo la calecita
                 else
-                    tiempo_enciendo_cinta = tiempo_actual;
+                    // tiempo_enciendo_cinta = tiempo_actual;
+                    pcf.write(S_calecita, 0); // enciendo la calecita
             }
             else if (salida_calecita == 0)
             {
+                tiempo_enciendo_cinta = tiempo_actual;
                 pcf.write(S_calecita, HIGH); // apago la calecita
             }
         }
@@ -800,16 +1039,19 @@ void loop()
             if (Tcinta * 10 < 10)
                 Tcinta = ciclo / 10; // si Tcinta es mas bajo que 10s lo pongo en el timpo que tarde cada siclo de la inyectora como tiempo minimo
             // if (tiempo_actual - tiempo_pasado_cinta == Tcinta)//original
-            if (tiempo_actual - tiempo_pasado_cinta >= Tcinta * 10 && salida_cinta != 0) // cambiado el 8/7/2019
+            if (tiempo_actual - tiempo_pasado_cinta >= Tcinta * 10 + espera_e_cinta_calesita * 10)
             {
-                salida_cinta = 0; // apago la cinta
-                aviso_giro = 0;
                 if (caja_llena == 1 && ultima_caja == 0)
                 {
                     girar_calecita = 1; // cuando termino el tiempo de la cinta y la caja tiene que cambiar enciendo la calecita
                 }
             }
-            if (tiempo_actual - tiempo_pasado_cinta >= (Tcinta * 10) - T_aviso_giro * 10)
+            if (tiempo_actual - tiempo_pasado_cinta >= Tcinta * 10 && salida_cinta != 0) // cambiado el 8/7/2019
+            {
+                salida_cinta = 0; // apago la cinta
+                aviso_giro = 0;
+            }
+            else if (tiempo_actual - tiempo_pasado_cinta >= (Tcinta * 10) - T_aviso_giro * 10)
             {
                 if (caja_llena == 1 && ultima_caja == 0)
                 {
@@ -834,7 +1076,28 @@ void loop()
 
             if (tiempo_actual - tiempo_pasado_cinta < Tcinta * 10 && salida_calecita == 0)
             {
-                salida_cinta = 1; // enciendo la cinta
+                // salida_cinta = 1; // enciendo la cinta
+                if (parpadeo != parpadeo_viejo_cinta)
+                {
+                    parpadeo_viejo_cinta = parpadeo;
+                    T_cinta_contador++;
+                    if (salida_cinta)
+                    {
+                        if (T_cinta_contador >= T_ON_Cinta)
+                        {
+                            salida_cinta = 0;
+                            T_cinta_contador = 0;
+                        }
+                    }
+                    else
+                    {
+                        if (T_cinta_contador >= T_OFF_Cinta)
+                        {
+                            salida_cinta = 1;
+                            T_cinta_contador = 0;
+                        }
+                    }
+                }
             }
         }
 
@@ -852,7 +1115,7 @@ void loop()
                 // tiempo_pasado_antirebote_inyectora = tiempo_pasado_antirebote_inyectora - 10;  //evito que el IF vuelva a pasar porque el tiempo_actual es = a 10 por varios siclos
                 inyectoraViejo = inyectora;
                 escribo_LCD = 1;
-                ciclo = 0; // reinicio la funcion de suspender
+                ciclo = 0; // vuelvo a tomar el tiempo de cada ciclo de la inyectora
                 if (pausa)
                 {
                     L_amarillo = 1;
@@ -993,31 +1256,52 @@ void loop()
         // if (boton_verde != boton_verde_viejo)//aumento la cantidad de cavidades si esta dentro del menu
         {
             // boton_verde_viejo = boton_verde;
-            if (boton_verde == 1 && Fcontacto == 0 && boton_rojo == 0)
+            // if (boton_verde == 1 && Fcontacto == 0 && boton_rojo == 0)
+            if ((boton_verde || boton_verde_viejo) && !boton_rojo)
             {
-                if (tiempo_actual - tiempo_pasado_boton_verde == 1) // espero que este en 1 por 1 decima de segundo
+                if (tiempo_actual - tiempo_pasado_boton_verde > 10 || boton_verde < boton_verde_viejo) // espero que este en 1 por 1 decima de segundo
                 {
                     demora = 0;
-                    Fcontacto = 1;
+                    // Fcontacto = 1;
+                    tiempo_luz = tiempo_actual;
                     escribo_LCD = 1;
-
-                    if (menu == 1) // aumento la cantidad de cavidades si esta dentro del menu
+                    tiempo_pasado_boton_verde = tiempo_actual - 9; // reinicio el tiempo de espera
+                    if (menu)
                     {
-                        cavidades += mas_rapido;
-                        mas_rapido++;
                         pregunta = 0;
-                    }
-                    else if (menu == 2)
-                    {
-                        limite_caja += mas_rapido * 10;
-                        mas_rapido++;
-                        pregunta = 0;
+                        if (cambiar)
+                        {
+                            mas_rapido++;
+                            switch (menu)
+                            {
+                            case 1:
+                                cavidades += mas_rapido;
+                                break;
+                            case 2:
+                                limite_caja += mas_rapido * 10;
+                                break;
+                            case 3:
+                                Tcinta += mas_rapido;
+                                break;
+                            case 4:
+                                T_ON_Cinta += mas_rapido;
+                                break;
+                            case 5:
+                                T_OFF_Cinta += mas_rapido;
+                                break;
+                            }
+                        }
+                        else
+                        {
+                            if (menu > 1)
+                                menu--;
+                        }
                     }
                     else if (guardamotores)
                     {
                         guardamotores = false;
                     }
-                    else if (automatico == 0) // si no estaba en automatico lo paso a automatico
+                    else if (automatico == 0 && boton_verde < boton_verde_viejo) // si no estaba en automatico lo paso a automatico
                     {
                         automatico = 1;
                     }
@@ -1041,6 +1325,8 @@ void loop()
                     else if (pausa)
                     { // si esta pausado lo reinicio
                         pausa = false;
+                        salida_cinta = 1;                    // enciendo la cinta
+                        tiempo_pasado_cinta = tiempo_actual; // reinicio el tiempo de espera para detener la cinta
                     }
                     else
                     {
@@ -1052,6 +1338,7 @@ void loop()
                     // digitalWrite(S_rojo, HIGH);
                     L_rojo = 0;
                 }
+                boton_verde_viejo = boton_verde;
             }
             else
             {
@@ -1062,24 +1349,46 @@ void loop()
         // if (boton_rojo != boton_rojo_viejo)//disminuyo la cantidad de cavidades si esta dentro del menu
 
         // boton_rojo_viejo = boton_rojo;
-        if (boton_rojo == 1 && Fcontacto == 0 && boton_verde == 0)
+        // if (boton_rojo == 1 && Fcontacto == 0 && boton_verde == 0)
+        if (!boton_verde && (boton_rojo || boton_rojo_viejo)) // disminuyo la cantidad de cavidades si esta dentro del menu
         {
-            if (tiempo_actual - tiempo_pasado_boton_rojo == 1) // espero que este en 1 por 1 decima de segundo
+            if (tiempo_actual - tiempo_pasado_boton_rojo > 10 || boton_rojo < boton_rojo_viejo) // espero que este en 1 por 1 decima de segundo
             {
                 demora = 0;
-                Fcontacto = 1;
+                // Fcontacto = 1;
+                tiempo_luz = tiempo_actual;
                 escribo_LCD = 1;
-                if (menu == 1)
+                tiempo_pasado_boton_rojo = tiempo_actual - 9; // reinicio el tiempo de espera
+                if (menu)
                 {
-                    cavidades -= mas_rapido;
-                    mas_rapido++;
                     pregunta = 0;
-                }
-                else if (menu == 2)
-                {
-                    limite_caja -= mas_rapido * 10;
-                    mas_rapido++;
-                    pregunta = 0;
+                    if (cambiar)
+                    {
+                        mas_rapido++;
+                        switch (menu)
+                        {
+                        case 1:
+                            cavidades -= mas_rapido;
+                            break;
+                        case 2:
+                            limite_caja -= mas_rapido * 10;
+                            break;
+                        case 3:
+                            Tcinta -= mas_rapido;
+                            break;
+                        case 4:
+                            T_ON_Cinta -= mas_rapido;
+                            break;
+                        case 5:
+                            T_OFF_Cinta -= mas_rapido;
+                            break;
+                        }
+                    }
+                    else
+                    {
+                        if (menu < 6)
+                            menu++;
+                    }
                 }
                 else if (automatico == 1 && pregunta == 0)
                 {
@@ -1108,23 +1417,27 @@ void loop()
                     N_inyecciones = 0;
                 }
             }
+            boton_rojo_viejo = boton_rojo;
         }
         else
         {
             tiempo_pasado_boton_rojo = tiempo_actual;
         }
 
-        if (boton_verde == 0 && boton_rojo == 0)
-            mas_rapido = 1;
+        // if (boton_verde == 0 && boton_rojo == 0)
+        if (!boton_verde && !boton_rojo && menu)
+            mas_rapido = 0;
 
-        if (boton_verde == 1 && boton_rojo == 1)
+        // if (boton_verde == 1 && boton_rojo == 1)
+        if (boton_verde && boton_rojo)
         {
-            pregunta = 0;
+            // pregunta = 0;
             if (parpadeo != parpadeo_viejo)
             {
-                escribo_LCD = 1;
                 parpadeo_viejo = parpadeo;
-                if (menu == 0)
+                if (menu)
+                    escribo_LCD = 1;
+                if (!menu)
                 {
                     if (demora == Tdesbloqueo)
                     {
@@ -1138,18 +1451,12 @@ void loop()
                         demora++;
                     }
                 }
-                else if (menu == 1)
-                {
-                    menu = 2; // acedo a cambiar la cantidad que llena una caja
-                }
-                else if (menu == 2)
-                {
-                    menu = 1; // regreso a cambiar la cantidad de cavidades
-                }
+                else
+                    cambiar = !cambiar;
             }
         }
 
-        if (menu != 0) // esperando para cerrar el menu
+        if (menu) // esperando para cerrar el menu
         {
             if (parpadeo != parpadeo_viejo)
             {
@@ -1157,9 +1464,13 @@ void loop()
                 if (demora == Tbloqueo)
                 {
                     menu = 0;
+                    cambiar = 0;
                     demora = 0;
                     EEPROM.write(4, cavidades); // guardo en la memoria la actualizacion al numero de cavidades
                     EEPROM.write(1, limite_caja / 10);
+                    EEPROM.write(5, T_ON_Cinta);
+                    EEPROM.write(6, T_OFF_Cinta);
+                    EEPROM.write(8, Tcinta);
                     EEPROM.commit();
                     calculo_comp = 0; // inicio el calculo de compensacion que muestra cuantas cajas se nececitan para que el promedio de la cantidad que tiene que tener cada caja
                     escribo_LCD = 1;
@@ -1191,12 +1502,12 @@ void loop()
 
         //----------------------------------------------------------------------FUNCION PARA EL BACKLIGHT DEL LCD-----------------
 
-        if (tiempo_actual - tiempo_luz == 600 && automatico == 1) // espero 60 segundospara apagar la luz del LCD
+        if (tiempo_actual - tiempo_luz == 60 && automatico == 1 && pausa) // espero 60 segundospara apagar la luz del LCD
         {
             lcd.begin(20, 4);
-            // lcd.setBacklight(LOW);// apago la luz del LCD
+            lcd.setBacklight(LOW); // apago la luz del LCD
             pregunta = 0;
-            escribo_LCD = 1;
+            // escribo_LCD = 1;
         }
         else if (tiempo_actual == tiempo_luz)
         {
@@ -1213,13 +1524,15 @@ void loop()
             L_verde = 1;
             lcd.setBacklight(HIGH); // PRENDO la luz del LCD
         }
-        else if (tiempo_actual - tiempo_suspender >= (ciclo * 2) && tiempo_actual - tiempo_luz >= 400 && automatico && !guradamotorCalecita && !guradamotorCinta && !pausa) // espero el doble del tiempo de ciclo para susupender
+        else if (tiempo_actual - tiempo_suspender >= (ciclo * 2) && automatico && !guradamotorCalecita && !guradamotorCinta && !pausa) // && tiempo_actual - tiempo_luz >= 400  espero el doble del tiempo de ciclo para susupender
         {
             pausa = true;
-            lcd.clear();           // limpio todo el LCD
-            lcd.setBacklight(LOW); // apago la luz del LCD
+            // lcd.clear();           // limpio todo el LCD
+            // lcd.setBacklight(LOW); // apago la luz del LCD
             // digitalWrite(S_verde, HIGH); //APAGO LA LUZ VERDE
+            escribo_LCD = 1;
             L_verde = 0;
+            tiempo_luz = tiempo_actual; // enciendo el back light del LCD
             // pcf.write(S_luz_calidad, HIGH);  // apago la luz del boton de calidad
         }
 
@@ -1321,10 +1634,11 @@ void loop()
             }
         }
         //------------------- prendo el LED en la placa con cada entrada-----------
-
-        if (entradas != parpadeo + inyectora + muestra + final_carrera + boton_verde + boton_rojo)
+        // byte suma_entradas = parpadeo + inyectora + muestra + final_carrera + boton_verde + boton_rojo;
+        byte suma_entradas = parpadeo + inyectora + muestra + final_carrera + boton_verde + boton_rojo;
+        if (entradas != suma_entradas)
         {
-            entradas = parpadeo + inyectora + muestra + final_carrera + boton_verde + boton_rojo;
+            entradas = suma_entradas;
             digitalWrite(LED_BUILTIN, entradas % 2);
             // lcd.setCursor(8, 3);
             // if (final_carrera) lcd.print("FC1");
@@ -1547,22 +1861,22 @@ void loop()
                 EEPROM.write(4, cavidades);
                 Serial.println(EEPROM.read(4));
             }
-            else if (dato == 6)
-            {
-                Tbloqueo = Serial.parseInt();
-                Serial.print(F("6- Tiempo de bloqueo = "));
-                EEPROM.write(5, Tbloqueo);
-                Serial.print(EEPROM.read(5));
-                Serial.println(F("s"));
-            }
-            else if (dato == 7)
-            {
-                Tdesbloqueo = Serial.parseInt();
-                Serial.print(F("7- Tiempo de desbloqueo = "));
-                EEPROM.write(6, Tdesbloqueo);
-                Serial.print(EEPROM.read(6));
-                Serial.println(F("s"));
-            }
+            // else if (dato == 6)
+            // {
+            //     Tbloqueo = Serial.parseInt();
+            //     Serial.print(F("6- Tiempo de bloqueo = "));
+            //     EEPROM.write(5, Tbloqueo);
+            //     Serial.print(EEPROM.read(5));
+            //     Serial.println(F("s"));
+            // }
+            // else if (dato == 7)
+            // {
+            //     Tdesbloqueo = Serial.parseInt();
+            //     Serial.print(F("7- Tiempo de desbloqueo = "));
+            //     EEPROM.write(6, Tdesbloqueo);
+            //     Serial.print(EEPROM.read(6));
+            //     Serial.println(F("s"));
+            // }
             else if (dato == 8)
             {
                 Treset = Serial.parseInt();
